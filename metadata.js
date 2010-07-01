@@ -1,3 +1,4 @@
+var sys = require('sys');
 var http = require('http');
 var events = require('events');
 
@@ -5,66 +6,69 @@ var service = require('./lib/service');
 var parse = require('./lib/parse');
 var transform = require('./lib/transform');
 
-exports.searchForTrack = function(track, callback) {
-	return createController('search', 'track', track, callback);
+module.exports = {
+	searchForTrack : function(track, callback) {
+		return new Controller('search', 'track', track, callback);
+	},
+	searchForArtist : function(artist, callback) {
+		return new Controller('search', 'artist', artist, callback);
+	},
+	searchForAlbum : function(album, callback) {
+		return new Controller('search', 'album', album, callback);
+	},
+	lookup : function(uri, callback) {
+		var kind = uri.split(':')[1];
+		return new Controller('lookup', kind, uri, callback);
+	}
 };
 
-exports.searchForArtist = function(artist, callback) {
-	return createController('search', 'artist', artist, callback);
-};
+Controller.prototype.__proto__ = events.EventEmitter.prototype;
 
-exports.searchForAlbum = function(album, callback) {
-	return createController('search', 'album', album, callback);
-};
+function Controller(operation, type, query, callback) {
+	this.operation = operation;
+	this.type = type;
+	this.query = query;
+	this.callback = callback;
 
-exports.lookup = function(uri, callback)
-{
-	var kind = uri.split(':')[1];
+	var self = this;
 
-	return createController('lookup', kind, uri, callback);
-}
-
-var createController = function(operation, type, query, callback) {
-	var instance = new events.EventEmitter;
-
-	instance.type = type;
-	instance.query = query;
-	instance.callback = callback;
-
-	var parser = parse
-		.createParser(instance.type)
-		.addListener(instance.type, function(node) {
-			var obj = transform.nodeToJSON(node);
-			instance.emit(instance.type, obj);
+	this.parser = parse.createParser()
+		.addListener('element', function(element) {
+			if (elementIsOfType(element, type)) {
+				var obj = transform.elementToJSON(element);
+				callback(obj);
+			}
 		})
 		.addListener('done', function() {
-			instance.emit('done');
+			self.emit('done');
 		})
 		.addListener('error', function(msg) {
-			instance.emit('error', msg);
+			self.emit('error', msg);
 		});
 
-	var client = service
-		.createClient()
+	this.client = service.createClient()
 		.addListener('data', function(chunk) {
-			parser.parse(chunk);
+			self.parser.parse(chunk);
 		})
 		.addListener('error', function(msg) {
-			instance.emit('error', msg);
+			self.emit('error', msg);
 		});
+}
 
-	instance.addListener(instance.type, function(item) {
-		instance.callback(item);
-	});
-
-	instance.execute = function() {
-		if (operation == 'search') {
-			client.search(instance.type + '.xml', instance.query);
-		}
-		else if (operation == 'lookup') {
-			client.lookup(instance.query);
-		}
+Controller.prototype.execute = function() {
+	switch (this.operation) {
+		case 'search':
+			this.client.search(this.type + '.xml', this.query);
+			break;
+		case 'lookup':
+			this.client.lookup(this.query);
+			break;
 	}
+}
 
-	return instance;
+function elementIsOfType(element, type) {
+	var rootElement = element.ownerDocument.documentElement;
+
+	return element.name == type && 
+		(element == rootElement || element.parentNode == rootElement);
 }
